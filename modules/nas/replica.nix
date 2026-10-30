@@ -1,0 +1,214 @@
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
+
+let
+  cfg = config.nuage.nas;
+  rcfg = cfg.replica;
+  src = rcfg.source;
+
+  isReplica = cfg.role == "replica";
+
+  # 必要な値がそろったときだけ中身を作る。欠けていれば assertion で落ちる。
+  ready =
+    cfg.pool != null
+    && src.host != null
+    && src.user != null
+    && isSecretPath src.sshKeyFile
+    && isSecretPath src.knownHostsFile
+    && rcfg.datasets != null;
+
+  # 秘密はファイルのパスで受け取る。store のパスを渡されたら、秘密が store に入っているので拒む。
+  isSecretPath = p: p != null && lib.hasPrefix "/" p && !lib.hasPrefix builtins.storeDir p;
+
+  # 一次側の dataset を、同じ名前で pool の下に受ける (例: pool-1/enc → tank/pool-1/enc)。
+  targetOf = dataset: "${cfg.pool}/${dataset}";
+
+  # syncoid のユニットに LoadCredential で渡す名前。ExecStart では %d (credentials のディレクトリ) から読む。
+  sshKeyCredential = "syncoid_ssh_key";
+  knownHostsCredential = "syncoid_known_hosts";
+
+  # 秘密のファイルが無ければ、何が無いかを書いて失敗する。syncoid のユニットはこれに requires で依存する。
+  checkSecrets = pkgs.writeShellScript "nas-replica-check-secrets" ''
+    missing=0
+    for f in ${
+      lib.escapeShellArgs [
+        src.sshKeyFile
+        src.knownHostsFile
+      ]
+    }; do
+      if [ ! -s "$f" ]; then
+        echo "nas-replica: 秘密のファイル $f が無い (または空である)。SD のシークレット用パーティションに書き込む。" >&2
+        missing=1
+      fi
+    done
+    exit "$missing"
+  '';
+in
+{
+  options.nuage.nas.replica = {
+    source = {
+      host = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "192.168.5.30";
+        description = "pull する一次側の NAS のホスト名か IP アドレス。";
+      };
+
+      user = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "pi-nas-pull";
+        description = ''
+          一次側の NAS で pull に使うユーザー。一次側では `zfs allow` で `send,hold` だけを渡す。
+          スナップショットを取る権限が無いので、syncoid は `--no-sync-snap` で一次側の sanoid のスナップショットを送る。
+        '';
+      };
+
+      sshKeyFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/var/lib/secrets/syncoid_ed25519";
+        description = ''
+          一次側へ SSH で入る秘密鍵のファイルのパス。Nix の store に入れないよう、文字列のパスで渡す。
+          ファイルが無ければ syncoid のユニットはエラーで止まる。
+        '';
+      };
+
+      knownHostsFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "/var/lib/secrets/syncoid_known_hosts";
+        description = ''
+          一次側の SSH のホスト鍵を書いた known_hosts のファイルのパス。ホスト鍵を確かめずにはつながない。
+          ファイルが無ければ syncoid のユニットはエラーで止まる。
+        '';
+      };
+    };
+
+    datasets = lib.mkOption {
+      type = lib.types.nullOr (lib.types.listOf lib.types.str);
+      default = null;
+      example = [ "pool-1/enc" ];
+      description = ''
+        複製する一次側の dataset の一覧。子の dataset も含めて (recursive で) 受ける。
+        受け先は `<pool>/<一次側の dataset>` になる。受け先の親 (例: `tank/pool-1`) は前もって作っておく。
+      '';
+    };
+
+    retention = {
+      hourly = lib.mkOption {
+        type = lib.types.ints.unsigned;
+        default = 24;
+        description = "残す hourly のスナップショットの数。";
+      };
+      daily = lib.mkOption {
+        type = lib.types.ints.unsigned;
+        default = 30;
+        description = "残す daily のスナップショットの数。";
+      };
+      monthly = lib.mkOption {
+        type = lib.types.ints.unsigned;
+        default = 12;
+        description = "残す monthly のスナップショットの数。";
+      };
+    };
+  };
+
+  config = lib.mkIf isReplica (
+    lib.mkMerge [
+      {
+        assertions = [
+          {
+            assertion = src.host != null;
+            message = "nuage.nas.replica.source.host が無い。pull する一次側の NAS のホストを渡す。";
+          }
+          {
+            assertion = src.user != null;
+            message = "nuage.nas.replica.source.user が無い。一次側の NAS で pull に使うユーザーを渡す。";
+          }
+          {
+            assertion = isSecretPath src.sshKeyFile;
+            message = "nuage.nas.replica.source.sshKeyFile が無いか、store のパスである。store の外の絶対パスを文字列で渡す。";
+          }
+          {
+            assertion = isSecretPath src.knownHostsFile;
+            message = "nuage.nas.replica.source.knownHostsFile が無いか、store のパスである。store の外の絶対パスを文字列で渡す。";
+          }
+          {
+            assertion = rcfg.datasets != null && rcfg.datasets != [ ];
+            message = "nuage.nas.replica.datasets が無い。複製する一次側の dataset を 1 つ以上渡す。";
+          }
+        ];
+      }
+
+      (lib.mkIf ready {
+        # 受けた dataset の鍵は、起動時に読み込まない。読み込もうとすると、鍵を聞いて起動が止まる。
+        boot.zfs.requestEncryptionCredentials = false;
+
+        # 複製: 一次側から pull する。暗号化した dataset を raw send (-w) で受け、受けた dataset は mount しない (-u)。
+        services.syncoid = {
+          enable = true;
+          sshKey = "%d/${sshKeyCredential}";
+          commonArgs = [
+            # 一次側のユーザーにはスナップショットを取る権限が無い。一次側の sanoid が取ったものを送る。
+            "--no-sync-snap"
+            "--sshoption=StrictHostKeyChecking=yes"
+            "--sshoption=UserKnownHostsFile=%d/${knownHostsCredential}"
+          ];
+          commands = lib.listToAttrs (
+            map (
+              dataset:
+              lib.nameValuePair dataset {
+                source = "${src.user}@${src.host}:${dataset}";
+                target = targetOf dataset;
+                recursive = true;
+                sendOptions = "w";
+                recvOptions = "u";
+                service = {
+                  requires = [ "nas-replica-secrets.service" ];
+                  after = [ "nas-replica-secrets.service" ];
+                  serviceConfig.LoadCredential = [
+                    "${sshKeyCredential}:${src.sshKeyFile}"
+                    "${knownHostsCredential}:${src.knownHostsFile}"
+                  ];
+                };
+              }
+            ) rcfg.datasets
+          );
+        };
+
+        # syncoid の前に秘密のファイルがあるかを確かめる。無ければこのユニットが失敗し、syncoid も動かない。
+        systemd.services.nas-replica-secrets = {
+          description = "syncoid の秘密のファイルがあるかを確かめる";
+          serviceConfig = {
+            Type = "oneshot";
+            ExecStart = checkSecrets;
+          };
+        };
+
+        # 世代: 世代の決まりは replica の側にだけ置く。ここではスナップショットを取らず、受けた分の古いものを消すだけにする。
+        services.sanoid = {
+          enable = true;
+          datasets = lib.listToAttrs (
+            map (
+              dataset:
+              lib.nameValuePair (targetOf dataset) {
+                recursive = true;
+                autosnap = false;
+                autoprune = true;
+                frequently = 0;
+                inherit (rcfg.retention) hourly daily monthly;
+                weekly = 0;
+                yearly = 0;
+              }
+            ) rcfg.datasets
+          );
+        };
+      })
+    ]
+  );
+}
