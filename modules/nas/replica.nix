@@ -219,11 +219,13 @@ in
           };
         };
 
-        # 月ごとの hold: syncoid のあとに走らせ、受け取ったスナップショットに Pi の時計で hold を付け外しする。
+        # 月ごとの hold: syncoid のあと、sanoid の前に走らせ、受け取ったスナップショットに Pi の時計で hold を付け外しする。
         # hold のかかったスナップショットは、sanoid が消そうとしても消えない (sanoid は警告を出して続け、ユニットは失敗しない)。
         systemd.services.nas-replica-hold = {
           description = "受け取ったスナップショットに月ごとの hold を付け外しする";
           after = [ "zfs.target" ] ++ syncoidUnits;
+          # sanoid も同じ時刻に起動する。hold を付け外しする間に、sanoid が一覧したスナップショットを消さないよう、先に走らせる。
+          before = [ "sanoid.service" ];
           startAt = config.services.syncoid.interval;
           serviceConfig = {
             Type = "oneshot";

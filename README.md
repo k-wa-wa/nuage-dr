@@ -43,7 +43,7 @@
 
 | 項目 | 中身 |
 | :-- | :-- |
-| ユニット | `nas-replica-hold` (timer は syncoid と同じ 1 時間ごと。syncoid のあとに走る) |
+| ユニット | `nas-replica-hold` (timer は syncoid と同じ 1 時間ごと。syncoid のあと、sanoid の前に走る) |
 | 対象 | 複製する dataset (例: `tank/pool-1/enc`) と、その子のそれぞれ |
 | 付ける | 今月のタグの hold が無ければ、受け取った順 (`createtxg`) で最新のスナップショットに付ける |
 | タグ | `nuage-keep-YYYY-MM`。年月は pi-nas の時計で決める |
