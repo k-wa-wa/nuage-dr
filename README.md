@@ -1,7 +1,7 @@
 # nuage-dr
 
-自宅の環境が丸ごと失われてもデータを失わないための、実家 (別の拠点) に置く Raspberry Pi の NixOS 構成である。
-あわせて、一次側の NAS と共有する NAS のモジュール (`nixosModules.nas`) を置く。全体の計画は nuage-cluster の `docs/dr-plan.md` にある。
+自宅の環境が丸ごと失われてもデータを失わないための、隔地 (別の拠点) に置く Raspberry Pi の NixOS 構成である。
+あわせて、一次側の NAS と共有する NAS のモジュール (`nixosModules.nas`) を置く。全体の計画は nuage-cluster の `docs/dr-plan.md` として作成予定である。
 
 | ホスト | 役 | 状態 |
 | :-- | :-- | :-- |
@@ -18,7 +18,8 @@
 | :-- | :-- |
 | ハードウェア | Raspberry Pi 5 + Radxa Penta SATA HAT (仮置き)。HDD 2 台を mirror にする |
 | 複製 | syncoid が 1 時間ごとに一次側から pull する。暗号化した dataset を raw send (`zfs send -w`) で受け、鍵は読み込まない。受けた dataset は mount しない |
-| 世代 | sanoid が受けたスナップショットの古いものを消す。pi-nas ではスナップショットを取らない |
+| 世代 | sanoid が受けたスナップショットの古いものを消す。pi-nas ではスナップショットを取らない。月ごとに 1 つ hold をかけ、消させない |
+| scrub | 月 1 回、pool を scrub する (`services.zfs.autoScrub`) |
 | 待ち受け | SSH は無効。firewall は既定で拒否。Tailscale は `--shields-up` で、受ける通信をすべて拒否する |
 | 更新 | nuage-dr の master を `system.autoUpgrade` で毎日取り込む (`github:k-wa-wa/nuage-dr#pi-nas`) |
 | watchdog | ハードウェアの watchdog を有効にし、固まったら再起動させる (`RuntimeWatchdogSec = 10s`) |
@@ -34,6 +35,42 @@
 | hourly | 24 |
 | daily | 30 |
 | monthly | 12 |
+
+#### 月ごとの hold
+
+一次側が乗っ取られて偽のスナップショットを大量に流されると、sanoid は数で古い世代を消すので、まともな世代が押し出される。
+それを防ぐため、pi-nas の側で、ひと月に 1 つ、そのとき最新の受け取り済みスナップショットに `zfs hold` をかける。hold のかかったスナップショットは消せない。
+
+| 項目 | 中身 |
+| :-- | :-- |
+| ユニット | `nas-replica-hold` (timer は syncoid と同じ 1 時間ごと。syncoid のあとに走る) |
+| 対象 | 複製する dataset (例: `tank/pool-1/enc`) と、その子のそれぞれ |
+| 付ける | 今月のタグの hold が無ければ、受け取った順 (`createtxg`) で最新のスナップショットに付ける |
+| タグ | `nuage-keep-YYYY-MM`。年月は pi-nas の時計で決める |
+| 外す | タグの年月が `nuage.nas.replica.monthlyHold.keepMonths` (既定 13) か月より古くなったら外す。13 なら、`nuage-keep-2026-10` は 2027-12 に外す |
+| 失敗 | 受け先が無い・スナップショットが無い・付け外しに失敗したときは、ユニットが失敗する |
+
+どれを固定するか・いつ外すかは、pi-nas の時計と pi-nas の決まりだけで決める。一次側が付けたスナップショットの名前 (`_monthly` など) と作成日時 (`creation`) は、一次側で偽れるので使わない。
+
+hold のかかったスナップショットを sanoid が消そうとすると、`cannot destroy snapshot ...: it's being held` と警告を出して次へ進む。sanoid のユニットは失敗しない。
+hold が外れたあとは、sanoid の決まりで消える。
+
+pool を import した機械で、次のように確かめる。pi-nas にはログインできないので、ディスクを別の機械につないだときに使う。
+
+```bash
+# hold のかかったスナップショット (userrefs が 1 以上) を一覧する
+zfs list -H -t snapshot -o name,userrefs -r tank/pool-1/enc | awk '$2 > 0'
+
+# あるスナップショットとその子の hold を見る
+zfs holds -r tank/pool-1/enc@<スナップショット>
+
+# すべての hold のタグを見る
+zfs list -H -o name -t snapshot -r tank/pool-1/enc | xargs -d '\n' zfs holds -H
+```
+
+付け外しの記録は pi-nas の journal に残る。SD を別の機械で読むときは、`journalctl -D <SD の root>/var/log/journal -u nas-replica-hold` で見る。
+
+手で外すときは `zfs release nuage-keep-YYYY-MM tank/pool-1/enc@<スナップショット>` を流す。
 
 ### 秘密
 

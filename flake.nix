@@ -1,5 +1,5 @@
 {
-  description = "実家の Raspberry Pi (DR 環境) の NixOS 構成と、一次側と共有する NAS モジュール";
+  description = "隔地の Raspberry Pi (DR 環境) の NixOS 構成と、一次側と共有する NAS モジュール";
 
   # nixos-raspberrypi のバイナリキャッシュ。Pi 用のカーネルとファームウェアを手元でビルドしないために使う。
   # 手元で SD イメージを作るときは `--accept-flake-config` を付ける。

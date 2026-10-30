@@ -47,6 +47,25 @@ let
     done
     exit "$missing"
   '';
+
+  # 月ごとの hold を付け外しするスクリプト。中身と理由は replica-hold.sh に書く。
+  holdScript = pkgs.writeShellApplication {
+    name = "nas-replica-hold";
+    runtimeInputs = [
+      config.boot.zfs.package
+      pkgs.coreutils
+    ];
+    text = builtins.readFile ./replica-hold.sh;
+  };
+
+  syncoidUnits = map (dataset: "syncoid-${escapeUnitName dataset}.service") rcfg.datasets;
+
+  # services.syncoid がユニットの名前を作るときと同じ規則で、dataset の名前を書き換える。
+  escapeUnitName =
+    name:
+    lib.concatMapStrings (s: if lib.isList s then "-" else s) (
+      builtins.split "[^a-zA-Z0-9_.\\-]+" name
+    );
 in
 {
   options.nuage.nas.replica = {
@@ -115,6 +134,16 @@ in
         default = 12;
         description = "残す monthly のスナップショットの数。";
       };
+    };
+
+    monthlyHold.keepMonths = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 13;
+      description = ''
+        月ごとの hold (`nuage-keep-YYYY-MM`) を残す月数。タグの年月がこの月数より古くなったら hold を外す。
+        hold は、ひと月に 1 つ、そのとき最新の受け取り済みスナップショットに Pi の側で付ける。
+        一次側が偽のスナップショットを大量に流しても、sanoid に月ごとの世代を消させないためである。
+      '';
     };
   };
 
@@ -187,6 +216,24 @@ in
           serviceConfig = {
             Type = "oneshot";
             ExecStart = checkSecrets;
+          };
+        };
+
+        # 月ごとの hold: syncoid のあとに走らせ、受け取ったスナップショットに Pi の時計で hold を付け外しする。
+        # hold のかかったスナップショットは、sanoid が消そうとしても消えない (sanoid は警告を出して続け、ユニットは失敗しない)。
+        systemd.services.nas-replica-hold = {
+          description = "受け取ったスナップショットに月ごとの hold を付け外しする";
+          after = [ "zfs.target" ] ++ syncoidUnits;
+          startAt = config.services.syncoid.interval;
+          serviceConfig = {
+            Type = "oneshot";
+            ExecStart = lib.escapeShellArgs (
+              [
+                (lib.getExe holdScript)
+                (toString rcfg.monthlyHold.keepMonths)
+              ]
+              ++ map targetOf rcfg.datasets
+            );
           };
         };
 

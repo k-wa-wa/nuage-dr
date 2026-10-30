@@ -9,7 +9,7 @@ let
 in
 {
   # 一次側 (source) と二次側 (replica) で共有する NAS のモジュール。
-  # 役ごとの中身は別のファイルに分け、ここでは役によらない option と pool の import だけを扱う。
+  # 役ごとの中身は別のファイルに分け、ここでは役によらない option と、pool の import・scrub だけを扱う。
   # source の役は、一次側の NAS を NixOS に移すときに source.nix として足す。
   imports = [
     ./replica.nix
@@ -59,6 +59,14 @@ in
       # データの pool は -f を付けずに import する (forceImportAll の既定値 false のまま)。他のホストで import された pool を黙って奪わない。
       # root を ZFS に置かないので forceImportRoot は効かないが、26.11 の既定値 false にそろえて警告を消す。
       boot.zfs.forceImportRoot = false;
+
+      # 定期 scrub で、読まれないまま壊れたブロックを見つけて mirror から直す。一次側と二次側のどちらにも要る。
+      # 間隔は月 1 回を既定とし、変えるときは services.zfs.autoScrub.interval を書く。
+      services.zfs.autoScrub = {
+        enable = true;
+        pools = [ cfg.pool ];
+        interval = lib.mkDefault "monthly";
+      };
     })
   ];
 }

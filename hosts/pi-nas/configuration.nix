@@ -1,7 +1,7 @@
 { ... }:
 
 {
-  # 実家に置く Raspberry Pi 5 の NAS。焼いたイメージで動き、ログインしないアプライアンスとする。
+  # 隔地に置く Raspberry Pi 5 の NAS。焼いたイメージで動き、ログインしないアプライアンスとする。
   # 一次側の NAS (192.168.5.30) から ZFS のスナップショットを pull で複製する。
   imports = [
     ./hardware.nix
@@ -30,6 +30,12 @@
       datasets = [ "pool-1/enc" ];
     };
   };
+
+  # ユーザーは宣言の中身だけにする。動いている間に足されたユーザーやパスワードは、次の切り替えで消える。
+  users.mutableUsers = false;
+  # 意図して誰もログインできなくしている。ログインしないアプライアンスなので、パスワードも SSH の鍵も持つユーザーを置かない。
+  # NixOS は締め出しを防ぐ assertion で止めるので、それを外す。
+  users.allowNoPasswordLogin = true;
 
   # 待ち受け: 何も受けない。SSH も開けない。
   services.openssh.enable = false;

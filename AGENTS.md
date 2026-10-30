@@ -4,9 +4,9 @@
 
 ## 1. このリポジトリの役割
 
-- 実家 (別の拠点) に置く Raspberry Pi の NixOS 構成と、一次側の NAS と共有する NAS モジュール (`nixosModules.nas`) を置く
+- 隔地 (別の拠点) に置く Raspberry Pi の NixOS 構成と、一次側の NAS と共有する NAS モジュール (`nixosModules.nas`) を置く
 - 自宅の環境が丸ごと失われたとき、本番 (nuage-cluster・GitHub の bot・atelier のエージェント) が乗っ取られたときにも、バックアップを消されないための場所である
-- 全体の計画は nuage-cluster の `docs/dr-plan.md` にある
+- 全体の計画は nuage-cluster の `docs/dr-plan.md` として作成予定である
 
 | 構成 | 中身 |
 | :-- | :-- |
