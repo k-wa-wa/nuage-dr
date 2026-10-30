@@ -141,6 +141,7 @@ in
       default = 13;
       description = ''
         月ごとの hold (`nuage-keep-YYYY-MM`) を残す月数。タグの年月がこの月数より古くなったら hold を外す。
+        ただし、受け取った順 (createtxg) で新しい方からこの数の hold は、年月によらず外さない。
         hold は、ひと月に 1 つ、そのとき最新の受け取り済みスナップショットに Pi の側で付ける。
         一次側が偽のスナップショットを大量に流しても、sanoid に月ごとの世代を消させないためである。
       '';
@@ -185,6 +186,13 @@ in
           commonArgs = [
             # 一次側のユーザーにはスナップショットを取る権限が無い。一次側の sanoid が取ったものを送る。
             "--no-sync-snap"
+            # 受け側を巻き戻さない (zfs receive に -F を付けない)。既定の -F では、一次側で新しい世代を消して送り直されると、
+            # 受け側でも共通の世代より新しい分が消える。巻き戻しが要るときは、syncoid がエラーで止まり、ユニットが失敗する。
+            "--no-rollback"
+            # pv を挟まない (--quiet のときだけ、syncoid は送受信の間に pv を挟まない)。pv 1.10 は入力が終わると、出力の pipe が
+            # 空になるまで待つ。zfs receive が失敗して読み残したまま終わると、pv が終わらず、syncoid もユニットも止まったまま残る。
+            # --quiet で消えるのは INFO と WARNING の出力だけで、失敗 (CRITICAL と zfs receive のエラー) は journal に残る。
+            "--quiet"
             "--sshoption=StrictHostKeyChecking=yes"
             "--sshoption=UserKnownHostsFile=%d/${knownHostsCredential}"
           ];

@@ -17,13 +17,32 @@
 | 項目 | 中身 |
 | :-- | :-- |
 | ハードウェア | Raspberry Pi 5 + Radxa Penta SATA HAT (仮置き)。HDD 2 台を mirror にする |
-| 複製 | syncoid が 1 時間ごとに一次側から pull する。暗号化した dataset を raw send (`zfs send -w`) で受け、鍵は読み込まない。受けた dataset は mount しない |
+| 複製 | syncoid が 1 時間ごとに一次側から pull する。暗号化した dataset を raw send (`zfs send -w`) で受け、鍵は読み込まない。受けた dataset は mount しない。受け側を巻き戻さない (`--no-rollback`、下の「複製」) |
 | 世代 | sanoid が受けたスナップショットの古いものを消す。pi-nas ではスナップショットを取らない。月ごとに 1 つ hold をかけ、消させない |
 | scrub | 月 1 回、pool を scrub する (`services.zfs.autoScrub`) |
 | 待ち受け | SSH は無効。firewall は既定で拒否。Tailscale は `--shields-up` で、受ける通信をすべて拒否する |
 | 更新 | nuage-dr の master を `system.autoUpgrade` で毎日取り込む (`github:k-wa-wa/nuage-dr#pi-nas`) |
 | watchdog | ハードウェアの watchdog を有効にし、固まったら再起動させる (`RuntimeWatchdogSec = 10s`) |
 | 停電 | Pi 5 は通電すると自動で起動する。停電から戻れば、そのまま動き出す |
+
+### 複製
+
+syncoid は `--no-rollback` を付けて動かす。`zfs receive` に `-F` を付けず、受け側の世代を消させないためである。
+
+syncoid の既定では `zfs receive -F` を使う。一次側で新しい世代を消し、別の世代を作って送り直されると、受け側でも共通の世代より新しい分が消える。
+一次側が乗っ取られても pi-nas の世代を消させない、という前提が崩れるので塞ぐ。
+
+巻き戻しが要る状況になると、syncoid はエラーで止まり、`syncoid-<dataset>` のユニットが失敗する。以後の複製も、人が手を入れるまで止まる。
+止まったときは、次を見る。
+
+- 一次側で何が消されたか。pi-nas の受け先の最新の世代が、一次側にまだあるかを比べる。一次側で消されていれば、消した操作が正当か (乗っ取りでないか) を一次側のログで確かめる
+- 正当であれば、pi-nas の世代を残したまま複製を戻す。受け先の世代を手で消して巻き戻すのは、消してよいと確かめてからにする
+
+普段の差分の pull (一次側で古い世代が消えても、共通の世代から新しい分を送る) は、`--no-rollback` でも今までどおり通る。
+
+syncoid には `--quiet` も付ける。`--quiet` のときだけ、syncoid は送受信の間に `pv` を挟まない。
+`pv` (1.10) は入力が終わると、出力の pipe が空になるまで待つ。`zfs receive` が失敗して読み残したまま終わると `pv` が終わらず、ユニットは失敗にならずに動いたまま残る。
+`--quiet` で消えるのは syncoid の INFO と WARNING の出力だけで、失敗 (`CRITICAL ERROR` と `zfs receive` のエラー) は journal に残る。
 
 ### 世代の決まり
 
@@ -48,14 +67,21 @@
 | 付ける | 今月のタグの hold が無ければ、受け取った順 (`createtxg`) で最新のスナップショットに付ける |
 | タグ | `nuage-keep-YYYY-MM`。年月は pi-nas の時計で決める |
 | 外す | タグの年月が `nuage.nas.replica.monthlyHold.keepMonths` (既定 13) か月より古くなったら外す。13 なら、`nuage-keep-2026-10` は 2027-12 に外す |
+| 数の下限 | 受け取った順 (`createtxg`) で新しい方から `keepMonths` 個の hold は、年月によらず外さない。年月の条件と数の下限の両方を満たすものだけを外す |
 | 失敗 | 受け先が無い・スナップショットが無い・付け外しに失敗したときは、ユニットが失敗する |
 
 どれを固定するか・いつ外すかは、pi-nas の時計と pi-nas の決まりだけで決める。一次側が付けたスナップショットの名前 (`_monthly` など) と作成日時 (`creation`) は、一次側で偽れるので使わない。
 
+数の下限は、時計を未来へ進められたときのためである。隔地の網で NTP を書き換えられると、pi-nas の時計が未来へ進み、年月の条件だけでは hold が一度にすべて外れる。
+数の下限があれば、時計を数年先へ進められても、hold は `keepMonths` 個より減らない。
+「新しい方」の順は、タグの年月ではなく受け取った順 (`createtxg`) で決める。タグの年月は、付けたときの時計に左右されるためである。同じスナップショットに複数の hold があるときは、タグの順に並べる。
+
+数の下限でも防げないことが残る。時計を 1 時間ごとに 1 か月ずつ進められると、走るたびに新しい月の hold が最新のスナップショットに付き、`keepMonths` 回で古い hold がすべて新しいものに入れ替わる。
+
 hold のかかったスナップショットを sanoid が消そうとすると、`cannot destroy snapshot ...: it's being held` と警告を出して次へ進む。sanoid のユニットは失敗しない。
 hold が外れたあとは、sanoid の決まりで消える。
 
-pool を import した機械で、次のように確かめる。pi-nas にはログインできないので、ディスクを別の機械につないだときに使う。
+pool を import した機械で、次のように確かめる。pi-nas にはログインできないので、installer の SD で起動したときに使う。
 
 ```bash
 # hold のかかったスナップショット (userrefs が 1 以上) を一覧する
@@ -97,8 +123,22 @@ Tailscale の管理画面で、pi-nas の鍵の期限切れ (key expiry) を無�
 
 pool は宣言で作らない。最初の 1 回だけ手で `zpool create` し、pi-nas は起動時に `boot.zfs.extraPools` で import するだけにする。pool の名前は `tank` とする (`nuage.nas.pool`)。
 
-pi-nas にはログインできないので、ZFS を使える別の Linux の機械にディスクをつないで作り、`zpool export` してから pi-nas につなぐ。
-export した pool は、pi-nas が `-f` 無しで import できる。作る機械の ZFS は、pi-nas の ZFS (2.4) より新しい版にしない。新しい版の機能を有効にすると、pi-nas で import できなくなる。
+pi-nas にはログインできないので、同じ Pi に、ログインできる別の SD (installer) を挿して起動し、そこで作る。SATA HAT のディスクは付け替えない。
+
+1. installer の SD を作る。nixos-raspberrypi の installer のイメージ (Pi 5 用) を、このリポジトリの flake から作る。nixos-raspberrypi はイメージのファイルを配っていないので、ビルドする。ビルドの仕方は下の「SD イメージの作り方と焼き方」と同じである
+
+   ```bash
+   nix build --accept-flake-config .#packages.aarch64-linux.rpi5-installer-sd-image
+   ls result/sd-image/   # nixos-installer-rpi5-kernel.img.zst
+   ```
+
+   nixpkgs を pi-nas とそろえているので、installer の ZFS は pi-nas と同じ版 (2.4) になる。新しい版の ZFS で作って新しい機能を有効にすると、pi-nas で import できなくなるので、他から取ったイメージは使わない
+2. ディスクをつないだ Pi に installer の SD を挿して起動する (pi-nas の SD が挿さっていれば抜く)。HDMI とキーボードをつなぐと、root でログインした状態になる。SSH で入るときは、画面に出る接続先とパスワードを使う (installer の SSH は一時的なものとし、作業が済んだら SD を抜く)
+3. 下のとおり `zpool create` と、受け先の親の dataset の作成をして、`zpool export` する
+4. `poweroff` で電源を切り、pi-nas の SD に差し替えて起動する。pi-nas は起動時に `tank` を import する
+
+installer の `networking.hostId` (`8425e349`) は pi-nas の (`72a7a172`) と違う。ZFS は、他の hostId の機械で使われたまま (export されずに) 止まった pool を、`-f` 無しでは import しない。
+`zpool export` してから差し替えれば、pi-nas は `-f` 無しで import できる。pi-nas は `-f` を付けずに import するので、export を忘れると pool が import されず、複製が止まる。そのときは installer の SD でもう一度起動し、`zpool import -f tank` してから `zpool export tank` する。
 
 ディスクは必ず `/dev/disk/by-id/...` で指す。`/dev/sdX` は起動のたびに変わりうる。
 

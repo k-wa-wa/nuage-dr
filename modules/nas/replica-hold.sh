@@ -11,6 +11,8 @@
 # 受け先の dataset とその子のそれぞれについて、次を行う。
 #   - 今月のタグ (nuage-keep-YYYY-MM、Pi の時計の年月) の hold が無ければ、最新のスナップショットに付ける
 #   - タグの年月が <残す月数> より古い hold を外す (例: 13 なら、2026-10 のタグは 2027-12 に外す)
+#   - ただし、受け取った順 (createtxg) で新しい方から <残す月数> 個の hold は、年月によらず外さない
+#     時計を未来へ進められても (NTP の書き換えなど)、一度に hold をすべて外させないためである
 # 何かに失敗したら、残りの dataset を続けたうえで、最後に失敗で終わる。
 
 if [ "$#" -lt 2 ]; then
@@ -41,8 +43,9 @@ fail() {
 
 hold_dataset() {
   local ds=$1
-  local out holds latest name htag age have=0
-  local -a snaps old=()
+  local out holds latest name htag age i have=0
+  local -a snaps mine=()
+  local -A order=()
 
   # この dataset だけのスナップショットを、受け取った順 (createtxg) に並べる。
   if ! out=$(zfs list -H -o name -t snapshot -d 1 -s createtxg "$ds"); then
@@ -54,6 +57,9 @@ hold_dataset() {
     return
   fi
   mapfile -t snaps <<<"$out"
+  for i in "${!snaps[@]}"; do
+    order[${snaps[i]}]=$i
+  done
 
   if ! holds=$(zfs holds -H "${snaps[@]}"); then
     fail "$ds の hold を一覧できない。"
@@ -61,16 +67,13 @@ hold_dataset() {
   fi
 
   # このスクリプトが付けた hold だけを見る。他のタグ (syncoid の --use-hold など) には触れない。
+  # 受け取った順の位置・タグ・スナップショットの名前を集める。
   while IFS=$'\t' read -r name htag _; do
     [[ -n $name && $htag =~ $tag_re ]] || continue
     if [ "$htag" = "$tag" ]; then
       have=1
-      continue
     fi
-    age=$((now_index - (10#${BASH_REMATCH[1]} * 12 + 10#${BASH_REMATCH[2]})))
-    if [ "$age" -gt "$keep_months" ]; then
-      old+=("$htag"$'\t'"$name")
-    fi
+    mine+=("${order[$name]}"$'\t'"$htag"$'\t'"$name")
   done <<<"$holds"
 
   if [ "$have" -eq 0 ]; then
@@ -81,11 +84,21 @@ hold_dataset() {
       return
     fi
     echo "$latest に $tag の hold を付けた。"
+    mine+=("$((${#snaps[@]} - 1))"$'\t'"$tag"$'\t'"$latest")
   fi
 
-  for entry in "${old[@]}"; do
-    htag=${entry%%$'\t'*}
-    name=${entry#*$'\t'}
+  # 受け取った順 (createtxg) に並べ、新しい方から keep_months 個は外さない。
+  # 順序はタグの年月で決めない。タグの年月は、付けたときの時計に左右されるためである。
+  # 同じスナップショットに複数の hold があるときは、タグの順に並べる。
+  mapfile -t mine < <(printf '%s\n' "${mine[@]}" | sort -t $'\t' -k1,1n -k2,2)
+
+  for ((i = 0; i < ${#mine[@]} - keep_months; i++)); do
+    IFS=$'\t' read -r _ htag name <<<"${mine[i]}"
+    [[ $htag =~ $tag_re ]]
+    age=$((now_index - (10#${BASH_REMATCH[1]} * 12 + 10#${BASH_REMATCH[2]})))
+    if [ "$age" -le "$keep_months" ]; then
+      continue
+    fi
     if zfs release "$htag" "$name"; then
       echo "$name から $htag の hold を外した。"
     else

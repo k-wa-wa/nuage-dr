@@ -77,7 +77,14 @@
         ];
       };
 
-      packages.aarch64-linux.pi-nas-sd-image = piNas.config.system.build.sdImage;
+      packages.aarch64-linux = {
+        pi-nas-sd-image = piNas.config.system.build.sdImage;
+
+        # pi-nas の pool を作るときに、同じ Pi で起動する installer のイメージ (README の「pool を作る」)。
+        # nixos-raspberrypi が出すものをそのまま出す。pi-nas の構成とは混ぜない。
+        # nixpkgs を follows でそろえているので、ZFS の版が pi-nas と同じになる。
+        rpi5-installer-sd-image = nixos-raspberrypi.installerImages.rpi5;
+      };
 
       formatter.x86_64-linux = nixpkgs.legacyPackages.x86_64-linux.nixfmt-tree;
 

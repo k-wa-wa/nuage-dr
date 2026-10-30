@@ -10,7 +10,7 @@
 
 | 構成 | 中身 |
 | :-- | :-- |
-| `flake.nix` | 入力と出力 (`nixosModules.nas`・`nixosConfigurations.pi-nas`・`packages.aarch64-linux.pi-nas-sd-image`・`checks`) |
+| `flake.nix` | 入力と出力 (`nixosModules.nas`・`nixosConfigurations.pi-nas`・`packages.aarch64-linux.pi-nas-sd-image`・`packages.aarch64-linux.rpi5-installer-sd-image`・`checks`) |
 | `modules/nas/` | NAS のモジュール。`nuage.nas.role` で役を選ぶ。今は `replica` だけがある |
 | `modules/auto-upgrade.nix` | Pi の更新の経路 (取り込みの設定はここにだけ置く) |
 | `hosts/pi-nas/` | pi-nas の構成 |
