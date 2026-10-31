@@ -15,6 +15,8 @@
 | `modules/auto-upgrade.nix` | 隔地の機器の更新の経路 (取り込みの設定はここにだけ置く) |
 | `hosts/dr-nas/` | dr-nas の構成 |
 | `docs/dr-nas-setup.md` | dr-nas のイメージの焼き方・秘密の置き方・pool の作り方 |
+| `.github/workflows/ci.yml` | CI (下の「6. CI」と `docs/ci.md`) |
+| `.github/scripts/lock-warn.sh` | flake の入力とキャッシュの設定の変化を警告するスクリプト (CI の `lock-warn`) |
 
 ## 2. 更新の経路
 
@@ -57,3 +59,12 @@
 
 - **言い切り調の使用**:
   コメントアウトやドキュメントを記述する際は、です・ます調（敬体）を避け、である・する調（常体）の言い切りを使用すること。
+
+## 6. CI
+
+詳細は `docs/ci.md` にある。
+
+- 必須のチェックは `check` と `build-pi-nas` である。master のルールセットがジョブの名前で指すので、ジョブの id と `name:` を変えない。matrix にしない
+- Actions を攻め口にしない。action はコミットの SHA で固定し、権限は `contents: read` だけにし、secrets と `pull_request_target` を使わない。PR から来る値を `run:` に直接埋めない
+- workflow を変えたら `nix run nixpkgs#actionlint` を通す
+- `lock-warn` の警告が出た PR (flake.lock を上げる PR を含む) は、要約の比較のリンクから差分を読んでからマージする

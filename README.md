@@ -18,7 +18,7 @@
 | :-- | :-- |
 | ハードウェア | x86 の 2 ベイの小型機 (N100・N150 など)。HDD 2 台を mirror にし、起動用に小容量の NVMe を 1 枚挿す。Pi 5 + SATA HAT は、電源の不足やカーネルの更新でディスクが見えなくなる報告があり、触らない隔地には向かないのでやめた |
 | 複製 | syncoid が 1 時間ごとに一次側から pull する。暗号化した dataset を raw send (`zfs send -w`) で受け、鍵は読み込まない。受けた dataset は mount しない。受け側を巻き戻さない (`--no-rollback`、下の「複製」) |
-| 世代 | sanoid が受けたスナップショットの古いものを消す。pi-nas ではスナップショットを取らない。月ごとに 1 つ hold をかけ、消させない |
+| 世代 | sanoid が受けたスナップショットの古いものを消す。pi-nas ではスナップショットを取らない。Pi が動いた時間で 30 日ごとに 1 つ hold をかけ、消させない |
 | scrub | 月 1 回、pool を scrub する (`services.zfs.autoScrub`) |
 | 待ち受け | SSH は無効。firewall は既定で拒否。Tailscale は `--shields-up` で、受ける通信をすべて拒否する |
 | 更新 | nuage-dr の master を `system.autoUpgrade` で毎日取り込む (`github:k-wa-wa/nuage-dr#dr-nas`) |
@@ -55,28 +55,24 @@ syncoid には `--quiet` も付ける。`--quiet` のときだけ、syncoid は�
 | daily | 30 |
 | monthly | 12 |
 
-#### 月ごとの hold
+#### hold
 
 一次側が乗っ取られて偽のスナップショットを大量に流されると、sanoid は数で古い世代を消すので、まともな世代が押し出される。
-それを防ぐため、pi-nas の側で、ひと月に 1 つ、そのとき最新の受け取り済みスナップショットに `zfs hold` をかける。hold のかかったスナップショットは消せない。
+それを防ぐため、pi-nas の側で、決まった間隔ごとに 1 つ、そのとき最新の受け取り済みスナップショットに `zfs hold` をかける。hold のかかったスナップショットは消せない。
 
 | 項目 | 中身 |
 | :-- | :-- |
 | ユニット | `nas-replica-hold` (timer は syncoid と同じ 1 時間ごと。syncoid のあと、sanoid の前に走る) |
 | 対象 | 複製する dataset (例: `tank/pool-1/enc`) と、その子のそれぞれ |
-| 付ける | 今月のタグの hold が無ければ、受け取った順 (`createtxg`) で最新のスナップショットに付ける |
-| タグ | `nuage-keep-YYYY-MM`。年月は pi-nas の時計で決める |
-| 外す | タグの年月が `nuage.nas.replica.monthlyHold.keepMonths` (既定 13) か月より古くなったら外す。13 なら、`nuage-keep-2026-10` は 2027-12 に外す |
-| 数の下限 | 受け取った順 (`createtxg`) で新しい方から `keepMonths` 個の hold は、年月によらず外さない。年月の条件と数の下限の両方を満たすものだけを外す |
-| 失敗 | 受け先が無い・スナップショットが無い・付け外しに失敗したときは、ユニットが失敗する |
+| 付ける | 前の hold から、pi-nas が動いていた時間の合計が `nuage.nas.replica.hold.intervalDays` (既定 30) 日になったら、受け取った順 (`createtxg`) で最新のスナップショットに付ける |
+| タグ | `nuage-keep-YYYY-MM`。年月は人が見て分かるためだけに入れ、判断には使わない |
+| 外す | 受け取った順 (`createtxg`) で新しい方から `nuage.nas.replica.hold.keep` (既定 13) 個を残し、それより古い hold を外す |
+| 失敗 | 受け先が無い・スナップショットが無い・付け外しに失敗した・状態のファイルが読めないときは、ユニットが失敗する |
 
-どれを固定するか・いつ外すかは、pi-nas の時計と pi-nas の決まりだけで決める。一次側が付けたスナップショットの名前 (`_monthly` など) と作成日時 (`creation`) は、一次側で偽れるので使わない。
+どれを固定するか・いつ外すかは、pi-nas の数えと pi-nas の決まりだけで決める。一次側が付けたスナップショットの名前 (`_monthly` など) と作成日時 (`creation`) は、一次側で偽れるので使わない。
+pi-nas の壁時計も使わない。NTP を書き換えられても、hold が早く付くことも外れることも無い。
 
-数の下限は、時計を未来へ進められたときのためである。隔地の網で NTP を書き換えられると、pi-nas の時計が未来へ進み、年月の条件だけでは hold が一度にすべて外れる。
-数の下限があれば、時計を数年先へ進められても、hold は `keepMonths` 個より減らない。
-「新しい方」の順は、タグの年月ではなく受け取った順 (`createtxg`) で決める。タグの年月は、付けたときの時計に左右されるためである。同じスナップショットに複数の hold があるときは、タグの順に並べる。
-
-数の下限でも防げないことが残る。時計を 1 時間ごとに 1 か月ずつ進められると、走るたびに新しい月の hold が最新のスナップショットに付き、`keepMonths` 回で古い hold がすべて新しいものに入れ替わる。
+付ける・外すの細かい決まりと、攻撃ごとに何が守るかは [docs/hold.md](docs/hold.md) に書く。
 
 hold のかかったスナップショットを sanoid が消そうとすると、`cannot destroy snapshot ...: it's being held` と警告を出して次へ進む。sanoid のユニットは失敗しない。
 hold が外れたあとは、sanoid の決まりで消える。
@@ -94,7 +90,7 @@ zfs holds -r tank/pool-1/enc@<スナップショット>
 zfs list -H -o name -t snapshot -r tank/pool-1/enc | xargs -d '\n' zfs holds -H
 ```
 
-付け外しの記録は pi-nas の journal に残る。SD を別の機械で読むときは、`journalctl -D <SD の root>/var/log/journal -u nas-replica-hold` で見る。
+付け外しの記録と付けた理由は pi-nas の journal に残る。SD を別の機械で読むときは、`journalctl -D <SD の root>/var/log/journal -u nas-replica-hold` で見る。
 
 手で外すときは `zfs release nuage-keep-YYYY-MM tank/pool-1/enc@<スナップショット>` を流す。
 
@@ -108,3 +104,9 @@ zfs list -H -o name -t snapshot -r tank/pool-1/enc | xargs -d '\n' zfs holds -H
 nix flake check
 nix build .#nixosConfigurations.dr-nas.config.system.build.toplevel
 ```
+
+## CI
+
+master 向けの PR と master への push で、評価・フォーマット・pi-nas のビルドを確かめる。pi-nas は master をそのまま取り込むので、master に入る前に壊れていないことを見る。`check` と `build-pi-nas` は必須のチェックである。`lock-warn` は、flake の入力とバイナリキャッシュの設定の変化を警告する。
+
+ジョブの中身、警告の見方、Actions の決まりは [docs/ci.md](docs/ci.md) にある。
