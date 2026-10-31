@@ -14,7 +14,7 @@
 | `modules/nas/` | NAS のモジュール。`nuage.nas.role` で役を選ぶ。今は `replica` だけがある |
 | `modules/auto-upgrade.nix` | Pi の更新の経路 (取り込みの設定はここにだけ置く) |
 | `hosts/pi-nas/` | pi-nas の構成 |
-| `.github/workflows/ci.yml` | CI (下の「6. CI」) |
+| `.github/workflows/ci.yml` | CI (下の「6. CI」と `docs/ci.md`) |
 | `.github/scripts/lock-warn.sh` | flake の入力とキャッシュの設定の変化を警告するスクリプト (CI の `lock-warn`) |
 
 ## 2. 更新の経路
@@ -67,23 +67,9 @@
 
 ## 6. CI
 
-`.github/workflows/ci.yml` が、master 向けの PR と master への push で走る。
+詳細は `docs/ci.md` にある。
 
-| ジョブ | マシン | 中身 | 必須 |
-| :-- | :-- | :-- | :-- |
-| `check` | `ubuntu-24.04` | `nix flake check` と nixfmt のずれの確かめ (`nix fmt -- --ci`) | 必須 |
-| `build-pi-nas` | `ubuntu-24.04-arm` | `nix build .#nixosConfigurations.pi-nas.config.system.build.toplevel` (SD イメージは作らない) | 必須 |
-| `lock-warn` | `ubuntu-24.04` | PR だけで走る。flake の入力とキャッシュの設定の変化を警告する | 必須にしない |
-
-- 必須のチェックは、master のルールセットでジョブの名前 (`check`・`build-pi-nas`) で指す (nuage-workspace の tf)。ジョブの id と `name:` を変えない。matrix にしない
-- `--no-update-lock-file` を付けて、flake.lock に無い入力を CI で黙って足させない
-- `build-pi-nas` は、nixos-raspberrypi のバイナリキャッシュを flake の `nixConfig` から `--accept-flake-config` で受ける
-- Actions を攻め口にしない。action はコミットの SHA で固定し、横にタグをコメントで書く。workflow の権限は `contents: read` だけにし、secrets を使わない。`pull_request_target` を使わない。PR から来る値 (タイトル・ブランチ名など) を `run:` に直接埋めない
+- 必須のチェックは `check` と `build-pi-nas` である。master のルールセットがジョブの名前で指すので、ジョブの id と `name:` を変えない。matrix にしない
+- Actions を攻め口にしない。action はコミットの SHA で固定し、権限は `contents: read` だけにし、secrets と `pull_request_target` を使わない。PR から来る値を `run:` に直接埋めない
 - workflow を変えたら `nix run nixpkgs#actionlint` を通す
-- `lock-warn` の比べる処理は `.github/scripts/lock-warn.sh` にある。手元では、書き換えた flake.lock を渡して試す
-
-  ```bash
-  GITHUB_STEP_SUMMARY=/dev/stdout .github/scripts/lock-warn.sh <前の flake.lock> flake.lock <前の flake.nix> flake.nix
-  ```
-
 - `lock-warn` の警告が出た PR (flake.lock を上げる PR を含む) は、要約の比較のリンクから差分を読んでからマージする
