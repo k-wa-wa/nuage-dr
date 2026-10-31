@@ -64,7 +64,7 @@
 
 詳細は `docs/ci.md` にある。
 
-- 必須のチェックは `check` と `build-pi-nas` である。master のルールセットがジョブの名前で指すので、ジョブの id と `name:` を変えない。matrix にしない
+- 必須のチェックは `check` と `build-dr-nas` である。master のルールセットがジョブの名前で指すので、ジョブの id と `name:` を変えない。matrix にしない
 - Actions を攻め口にしない。action はコミットの SHA で固定し、権限は `contents: read` だけにし、secrets と `pull_request_target` を使わない。PR から来る値を `run:` に直接埋めない
 - workflow を変えたら `nix run nixpkgs#actionlint` を通す
 - `lock-warn` の警告が出た PR (flake.lock を上げる PR を含む) は、要約の比較のリンクから差分を読んでからマージする

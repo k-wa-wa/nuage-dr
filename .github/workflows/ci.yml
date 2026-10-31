@@ -1,7 +1,7 @@
 # nuage-dr の CI。
 #
-# pi-nas は master を system.autoUpgrade で取り込むので、master に入るものがそのまま Pi に入る。
-# check と build-pi-nas は、master のルールセットで必須のチェックにする (nuage-workspace の tf)。
+# dr-nas は master を system.autoUpgrade で取り込むので、master に入るものがそのまま dr-nas に入る。
+# check と build-dr-nas は、master のルールセットで必須のチェックにする (nuage-workspace の tf)。
 # 必須のチェックはジョブの名前で指すので、ジョブの id と name を変えない。matrix にもしない。
 #
 # Actions を攻め口にしないための決まり:
@@ -37,9 +37,9 @@ jobs:
       - name: nixfmt
         run: nix fmt --no-update-lock-file -- --ci
 
-  build-pi-nas:
-    name: build-pi-nas
-    runs-on: ubuntu-24.04-arm
+  build-dr-nas:
+    name: build-dr-nas
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       # ランナーに入っている、使わない大きなツールを消して、/nix の場所を空ける。
@@ -52,10 +52,9 @@ jobs:
         with:
           persist-credentials: false
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
-      # nixos-raspberrypi のバイナリキャッシュを、flake の nixConfig から受ける。
-      # 受けないと、Pi のカーネルをランナーの上でビルドする。SD イメージは作らない。
-      - name: pi-nas の構成をビルドする
-        run: nix build --accept-flake-config --no-update-lock-file --print-build-logs .#nixosConfigurations.pi-nas.config.system.build.toplevel
+      # 焼くイメージは作らない。
+      - name: dr-nas の構成をビルドする
+        run: nix build --no-update-lock-file --print-build-logs .#nixosConfigurations.dr-nas.config.system.build.toplevel
       - name: ディスクの残り
         if: always()
         run: df -h /

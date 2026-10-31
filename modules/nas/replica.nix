@@ -143,7 +143,7 @@ in
         type = lib.types.ints.positive;
         default = 30;
         description = ''
-          hold (`nuage-keep-YYYY-MM`) を付ける間隔の日数。前に付けてから、Pi が動いていた時間の合計がこの日数になったら、
+          hold (`nuage-keep-YYYY-MM`) を付ける間隔の日数。前に付けてから、受け側が動いていた時間の合計がこの日数になったら、
           そのとき最新の受け取り済みスナップショットに次の hold を付ける。
           経過は monotonic の時計 (CLOCK_BOOTTIME) で測り、壁時計は使わない。NTP で時計を進められても、hold は早く付かない。
           止まっていた時間 (再起動をまたいだ分) は数えないので、止まった分だけ遅れる。
@@ -253,7 +253,7 @@ in
         };
 
         # hold: syncoid のあと、sanoid の前に走らせ、受け取ったスナップショットに hold を付け外しする。
-        # 付ける間隔は Pi が動いていた時間 (monotonic の時計) で測り、外すのは数で決める。壁時計は使わない。
+        # 付ける間隔は受け側が動いていた時間 (monotonic の時計) で測り、外すのは数で決める。壁時計は使わない。
         # hold のかかったスナップショットは、sanoid が消そうとしても消えない (sanoid は警告を出して続け、ユニットは失敗しない)。
         systemd.services.nas-replica-hold = {
           description = "受け取ったスナップショットに hold を付け外しする";

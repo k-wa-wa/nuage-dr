@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PR の前後で flake の入力とバイナリキャッシュの設定を比べ、変わったものを警告する。
 #
-# pi-nas は master を autoUpgrade で取り込むので、flake.lock の更新はそのまま Pi に入る。
+# dr-nas は master を autoUpgrade で取り込むので、flake.lock の更新はそのまま dr-nas に入る。
 # 入力の rev が変わったら、何が変わったかを読んでからマージできるよう、比較のリンクを並べる。
 # nixConfig のキャッシュの設定が変わったら、信用するバイナリの出どころが変わるので、別に強く警告する。
 #
@@ -201,7 +201,7 @@ else
 
   if jq -se 'any(.thirdParty)' <<<"$changes" >/dev/null; then
     summary "> [!WARNING]" \
-      "> **第三者の flake が変わった。** 個人などが保守する flake (nixos-raspberrypi など) は、Pi のカーネル・ブートローダー・起動の仕組みに入る。比較のリンクから差分を読んでからマージする。" ""
+      "> **第三者の flake が変わった。** 個人などが保守する flake は、隔地の機器にそのまま入る。比較のリンクから差分を読んでからマージする。" ""
   fi
   summary "### flake.lock" "" "| 入力 | 取り込み元 | 前 | 後 | 差分 | 注意 |" "| :-- | :-- | :-- | :-- | :-- | :-- |"
   jq -sr 'def code: if . == "" then "(無い)" else "`\(.)`" end;
