@@ -1,0 +1,98 @@
+# nuage-dr の CI。
+#
+# pi-nas は master を system.autoUpgrade で取り込むので、master に入るものがそのまま Pi に入る。
+# check と build-pi-nas は、master のルールセットで必須のチェックにする (nuage-workspace の tf)。
+# 必須のチェックはジョブの名前で指すので、ジョブの id と name を変えない。matrix にもしない。
+#
+# Actions を攻め口にしないための決まり:
+#   - action はコミットの SHA で固定し、横にタグを書く
+#   - 権限は contents: read だけにし、secrets を使わない
+#   - pull_request_target を使わない
+#   - PR から来る値 (タイトル・ブランチ名など) を run: に直接埋めない
+name: ci
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+      # flake.lock に無い入力を黙って足させない。足すなら PR で flake.lock を変え、lock-warn に出す。
+      - name: nix flake check
+        run: nix flake check --no-update-lock-file --print-build-logs
+      # flake の formatter (nixfmt-tree) で、ずれがあれば落とす。
+      - name: nixfmt
+        run: nix fmt --no-update-lock-file -- --ci
+
+  build-pi-nas:
+    name: build-pi-nas
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      # ランナーに入っている、使わない大きなツールを消して、/nix の場所を空ける。
+      - name: ディスクを空ける
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache /usr/local/share/boost
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+      # nixos-raspberrypi のバイナリキャッシュを、flake の nixConfig から受ける。
+      # 受けないと、Pi のカーネルをランナーの上でビルドする。SD イメージは作らない。
+      - name: pi-nas の構成をビルドする
+        run: nix build --accept-flake-config --no-update-lock-file --print-build-logs .#nixosConfigurations.pi-nas.config.system.build.toplevel
+      - name: ディスクの残り
+        if: always()
+        run: df -h /
+
+  # flake の入力とバイナリキャッシュの設定の変化を警告する。必須にはしない。警告にとどめ、落とさない。
+  lock-warn:
+    name: lock-warn
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      # pull_request では、PR を base にマージした仮のコミットを取る。その 1 つ目の親が base である。
+      # 2 つを比べれば、マージしたときに master で変わるものだけが出る。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: base の flake.lock と flake.nix を取り出す
+        id: base
+        run: |
+          if [ "$(git rev-list --parents -n 1 HEAD | wc -w)" -ne 3 ]; then
+            echo "HEAD が PR のマージのコミットでない" >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/base"
+          for f in flake.lock flake.nix; do
+            if git cat-file -e "HEAD^1:$f" 2>/dev/null; then
+              git show "HEAD^1:$f" >"$RUNNER_TEMP/base/$f"
+            fi
+          done
+          if git diff --quiet HEAD^1 HEAD -- flake.nix; then
+            echo "nix-changed=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "nix-changed=true" >>"$GITHUB_OUTPUT"
+          fi
+      # flake.nix が変わったときだけ、nixConfig を読むのに nix を入れる。
+      - if: steps.base.outputs.nix-changed == 'true'
+        uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
+      - name: 入力とキャッシュの設定を比べる
+        run: .github/scripts/lock-warn.sh "$RUNNER_TEMP/base/flake.lock" flake.lock "$RUNNER_TEMP/base/flake.nix" flake.nix

@@ -199,3 +199,9 @@ zstd -dc result/sd-image/nixos-image-rpi5-kernel.img.zst | sudo dd of=/dev/sdX b
 nix flake check
 nix eval .#nixosConfigurations.pi-nas.config.system.build.toplevel.drvPath
 ```
+
+## CI
+
+master 向けの PR と master への push で、評価・フォーマット・pi-nas のビルドを確かめる。pi-nas は master をそのまま取り込むので、master に入る前に壊れていないことを見る。`check` と `build-pi-nas` は必須のチェックである。`lock-warn` は、flake の入力とバイナリキャッシュの設定の変化を警告する。
+
+ジョブの中身、警告の見方、Actions の決まりは [docs/ci.md](docs/ci.md) にある。
