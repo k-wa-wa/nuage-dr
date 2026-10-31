@@ -48,7 +48,7 @@ let
     exit "$missing"
   '';
 
-  # 月ごとの hold を付け外しするスクリプト。中身と理由は replica-hold.sh に書く。
+  # hold を付け外しするスクリプト。中身と理由は replica-hold.sh に書く。
   holdScript = pkgs.writeShellApplication {
     name = "nas-replica-hold";
     runtimeInputs = [
@@ -57,6 +57,8 @@ let
     ];
     text = builtins.readFile ./replica-hold.sh;
   };
+
+  holdStateDirectory = "nas-replica-hold";
 
   syncoidUnits = map (dataset: "syncoid-${escapeUnitName dataset}.service") rcfg.datasets;
 
@@ -136,15 +138,27 @@ in
       };
     };
 
-    monthlyHold.keepMonths = lib.mkOption {
-      type = lib.types.ints.positive;
-      default = 13;
-      description = ''
-        月ごとの hold (`nuage-keep-YYYY-MM`) を残す月数。タグの年月がこの月数より古くなったら hold を外す。
-        ただし、受け取った順 (createtxg) で新しい方からこの数の hold は、年月によらず外さない。
-        hold は、ひと月に 1 つ、そのとき最新の受け取り済みスナップショットに Pi の側で付ける。
-        一次側が偽のスナップショットを大量に流しても、sanoid に月ごとの世代を消させないためである。
-      '';
+    hold = {
+      intervalDays = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 30;
+        description = ''
+          hold (`nuage-keep-YYYY-MM`) を付ける間隔の日数。前に付けてから、Pi が動いていた時間の合計がこの日数になったら、
+          そのとき最新の受け取り済みスナップショットに次の hold を付ける。
+          経過は monotonic の時計 (CLOCK_BOOTTIME) で測り、壁時計は使わない。NTP で時計を進められても、hold は早く付かない。
+          止まっていた時間 (再起動をまたいだ分) は数えないので、止まった分だけ遅れる。
+        '';
+      };
+
+      keep = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 13;
+        description = ''
+          残す hold の数。受け取った順 (createtxg) で新しい方からこの数を残し、それより古い hold を外す。
+          外すかどうかは数だけで決め、壁時計とタグの年月は使わない。
+          一次側が偽のスナップショットを大量に流しても、sanoid に hold のかかった世代を消させないためである。
+        '';
+      };
     };
   };
 
@@ -183,6 +197,17 @@ in
         services.syncoid = {
           enable = true;
           sshKey = "%d/${sshKeyCredential}";
+          # 受け側で syncoid のユーザーに渡す権限。nixpkgs の既定から rollback を外す。
+          # --no-rollback で zfs receive に -F を付けないので、巻き戻しの権限は要らない。
+          # 持たせないことで、syncoid の側から受け側の世代を巻き戻せないようにする。
+          localTargetAllow = [
+            "change-key"
+            "compression"
+            "create"
+            "mount"
+            "mountpoint"
+            "receive"
+          ];
           commonArgs = [
             # 一次側のユーザーにはスナップショットを取る権限が無い。一次側の sanoid が取ったものを送る。
             "--no-sync-snap"
@@ -227,20 +252,26 @@ in
           };
         };
 
-        # 月ごとの hold: syncoid のあと、sanoid の前に走らせ、受け取ったスナップショットに Pi の時計で hold を付け外しする。
+        # hold: syncoid のあと、sanoid の前に走らせ、受け取ったスナップショットに hold を付け外しする。
+        # 付ける間隔は Pi が動いていた時間 (monotonic の時計) で測り、外すのは数で決める。壁時計は使わない。
         # hold のかかったスナップショットは、sanoid が消そうとしても消えない (sanoid は警告を出して続け、ユニットは失敗しない)。
         systemd.services.nas-replica-hold = {
-          description = "受け取ったスナップショットに月ごとの hold を付け外しする";
+          description = "受け取ったスナップショットに hold を付け外しする";
           after = [ "zfs.target" ] ++ syncoidUnits;
           # sanoid も同じ時刻に起動する。hold を付け外しする間に、sanoid が一覧したスナップショットを消さないよう、先に走らせる。
           before = [ "sanoid.service" ];
           startAt = config.services.syncoid.interval;
           serviceConfig = {
             Type = "oneshot";
+            # 前に付けてからの経過を積み上げる状態を置く (/var/lib/nas-replica-hold)。
+            StateDirectory = holdStateDirectory;
+            StateDirectoryMode = "0700";
             ExecStart = lib.escapeShellArgs (
               [
                 (lib.getExe holdScript)
-                (toString rcfg.monthlyHold.keepMonths)
+                "/var/lib/${holdStateDirectory}"
+                (toString (rcfg.hold.intervalDays * 24 * 60 * 60))
+                (toString rcfg.hold.keep)
               ]
               ++ map targetOf rcfg.datasets
             );
