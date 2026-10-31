@@ -1,16 +1,16 @@
 { ... }:
 
 {
-  # 隔地に置く Raspberry Pi 5 の NAS。焼いたイメージで動き、ログインしないアプライアンスとする。
+  # 隔地に置く x86 の小型 NAS。焼いたイメージで動き、ログインしないアプライアンスとする。
   # 一次側の NAS (192.168.5.30) から ZFS のスナップショットを pull で複製する。
   imports = [
     ./hardware.nix
   ];
 
-  networking.hostName = "pi-nas";
+  networking.hostName = "dr-nas";
 
   # ZFS が pool の持ち主を見分けるための ID。変えると pool の import に -f が要るので変えない。
-  networking.hostId = "72a7a172";
+  networking.hostId = "2baa868f";
 
   time.timeZone = "Asia/Tokyo";
 
@@ -20,11 +20,11 @@
     replica = {
       source = {
         host = "192.168.5.30";
-        # 一次側で pi-nas の pull 専用に作るユーザー。一次側では send,hold だけを渡す。
-        user = "pi-nas-pull";
-        # 秘密は焼くときに書き込む。Nix の store とイメージファイルには入れない。
-        sshKeyFile = "/var/lib/secrets/syncoid_ed25519";
-        knownHostsFile = "/var/lib/secrets/syncoid_known_hosts";
+        # 一次側で dr-nas の pull 専用に作るユーザー。一次側では send,hold だけを渡す。
+        user = "dr-nas-pull";
+        # 秘密は焼いたあとに ESP の secrets/ へ書き込む (hardware.nix)。Nix の store とイメージファイルには入れない。
+        sshKeyFile = "/boot/secrets/syncoid_ed25519";
+        knownHostsFile = "/boot/secrets/syncoid_known_hosts";
       };
       # 仮置き。一次側の NAS を NixOS に移し、暗号化した dataset を作ったら、その名前に合わせる。
       datasets = [ "pool-1/enc" ];
@@ -45,9 +45,9 @@
   # 一次側の NAS へは自宅の subnet router を通るので、経路を受け入れる (--accept-routes)。
   services.tailscale = {
     enable = true;
-    # 前もって Tailnet Lock の署名をした auth key (tag:pi-nas)。焼くときに書き込む。
+    # 前もって Tailnet Lock の署名をした auth key (tag:dr-nas)。焼いたあとに書き込む。
     # ファイルが無ければ tailscaled-autoconnect がエラーで止まる。
-    authKeyFile = "/var/lib/secrets/tailscale_authkey";
+    authKeyFile = "/boot/secrets/tailscale_authkey";
     useRoutingFeatures = "client";
     extraUpFlags = [
       "--shields-up"
@@ -60,10 +60,9 @@
     ];
   };
 
-  # 固まったらハードウェアの watchdog で再起動させる。
-  # Pi の watchdog (bcm2835-wdt) は 15 秒より長くできないので、それより短くする。
+  # 固まったらハードウェアの watchdog (x86 では iTCO_wdt など) で再起動させる。使えるかは機種で確かめる。
   systemd.settings.Manager = {
-    RuntimeWatchdogSec = "10s";
+    RuntimeWatchdogSec = "30s";
     RebootWatchdogSec = "10min";
   };
 

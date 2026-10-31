@@ -41,7 +41,7 @@ let
       ]
     }; do
       if [ ! -s "$f" ]; then
-        echo "nas-replica: 秘密のファイル $f が無い (または空である)。SD のシークレット用パーティションに書き込む。" >&2
+        echo "nas-replica: 秘密のファイル $f が無い (または空である)。ホストの手順 (dr-nas は docs/dr-nas-setup.md) のとおりに置く。" >&2
         missing=1
       fi
     done
@@ -80,7 +80,7 @@ in
       user = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        example = "pi-nas-pull";
+        example = "dr-nas-pull";
         description = ''
           一次側の NAS で pull に使うユーザー。一次側では `zfs allow` で `send,hold` だけを渡す。
           スナップショットを取る権限が無いので、syncoid は `--no-sync-snap` で一次側の sanoid のスナップショットを送る。
