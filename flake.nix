@@ -1,39 +1,19 @@
 {
-  description = "隔地の Raspberry Pi (DR 環境) の NixOS 構成と、一次側と共有する NAS モジュール";
-
-  # nixos-raspberrypi のバイナリキャッシュ。Pi 用のカーネルとファームウェアを手元でビルドしないために使う。
-  # 手元で SD イメージを作るときは `--accept-flake-config` を付ける。
-  # Pi の上の nix には、nixos-raspberrypi.lib.nixosSystem が同じキャッシュを設定する (trusted-nix-caches)。
-  nixConfig = {
-    extra-substituters = [
-      "https://nixos-raspberrypi.cachix.org"
-    ];
-    extra-trusted-public-keys = [
-      "nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI="
-    ];
-  };
+  description = "隔地 (DR 環境) の機器の NixOS 構成と、一次側と共有する NAS モジュール";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
-
-    # Pi 5 のカーネル・ファームウェア・ブートローダーと SD イメージを作るモジュール。
-    # キャッシュに当たるよう、nixpkgs は nixos-raspberrypi の flake.lock と同じ版に合わせて固定する。
-    nixos-raspberrypi = {
-      url = "github:nvmd/nixos-raspberrypi";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs =
     {
       self,
       nixpkgs,
-      nixos-raspberrypi,
       ...
     }:
     let
       lib = nixpkgs.lib;
-      piNas = self.nixosConfigurations.pi-nas;
+      drNas = self.nixosConfigurations.dr-nas;
 
       # nixosModules.nas の assertion を確かめるための、最小の x86_64 の構成。
       evalNas =
@@ -63,32 +43,39 @@
         map (a: a.message) (lib.filter (a: !a.assertion) cfg.assertions);
     in
     {
-      # 一次側 (nuage-cluster の nas) と二次側 (pi-nas) で共有する NAS のモジュール。
-      # nixos-raspberrypi に依存させない。nuage-cluster は x86_64 でこれを読む。
+      # 一次側 (nuage-cluster の nas) と二次側 (dr-nas) で共有する NAS のモジュール。
+      # 機種に固有の設定は入れない。機種の設定は hosts/ に置く。
       nixosModules.nas = ./modules/nas;
 
-      nixosConfigurations.pi-nas = nixos-raspberrypi.lib.nixosSystem {
-        modules = [
-          nixos-raspberrypi.nixosModules.raspberry-pi-5.base
-          nixos-raspberrypi.nixosModules.sd-image
-          self.nixosModules.nas
-          ./modules/auto-upgrade.nix
-          ./hosts/pi-nas/configuration.nix
-        ];
+      nixosConfigurations = {
+        dr-nas = lib.nixosSystem {
+          system = "x86_64-linux";
+          modules = [
+            self.nixosModules.nas
+            ./modules/auto-upgrade.nix
+            ./hosts/dr-nas/configuration.nix
+          ];
+        };
+
+        # dr-nas の pool を作るときに、同じ機械で起動する installer (docs/dr-nas-setup.md)。
+        # dr-nas の構成とは混ぜない。同じ nixpkgs から作るので、ZFS の版が dr-nas と同じになる。
+        dr-nas-installer = lib.nixosSystem {
+          system = "x86_64-linux";
+          modules = [
+            "${nixpkgs}/nixos/modules/installer/cd-dvd/installation-cd-minimal.nix"
+          ];
+        };
       };
 
-      packages.aarch64-linux = {
-        pi-nas-sd-image = piNas.config.system.build.sdImage;
-
-        # pi-nas の pool を作るときに、同じ Pi で起動する installer のイメージ (README の「pool を作る」)。
-        # nixos-raspberrypi が出すものをそのまま出す。pi-nas の構成とは混ぜない。
-        # nixpkgs を follows でそろえているので、ZFS の版が pi-nas と同じになる。
-        rpi5-installer-sd-image = nixos-raspberrypi.installerImages.rpi5;
+      packages.x86_64-linux = {
+        # 起動用の NVMe に焼く raw のイメージ (ESP と ext4 の root)。
+        dr-nas-image = drNas.config.system.build.images.raw-efi;
+        dr-nas-installer-iso = self.nixosConfigurations.dr-nas-installer.config.system.build.isoImage;
       };
 
       formatter.x86_64-linux = nixpkgs.legacyPackages.x86_64-linux.nixfmt-tree;
 
-      # aarch64 のビルドが要るものは入れない。評価だけで確かめる。
+      # 評価だけで確かめる。ビルドは CI と手元で行う。
       checks.x86_64-linux =
         let
           pkgs = nixpkgs.legacyPackages.x86_64-linux;
@@ -121,9 +108,9 @@
               EOF
             '';
 
-          # pi-nas の構成が評価できることを確かめる (ビルドはしない)。
-          pi-nas-eval = pkgs.writeText "pi-nas-drv-path" (
-            builtins.unsafeDiscardStringContext piNas.config.system.build.toplevel.drvPath
+          # dr-nas の構成が評価できることを確かめる (ビルドはしない)。
+          dr-nas-eval = pkgs.writeText "dr-nas-drv-path" (
+            builtins.unsafeDiscardStringContext drNas.config.system.build.toplevel.drvPath
           );
         };
     };
